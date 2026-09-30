@@ -2,6 +2,12 @@
 
 Aplicación independiente con catálogo público y panel administrador privado.
 
+## Actualización: listas de precio
+
+Para una instalación que ya está funcionando, ejecuta una sola vez en **Supabase > SQL Editor** el archivo `supabase/migration_4_price_lists.sql`.
+
+En el panel `/admin` aparece el botón **Listas de precio**. Permite crear varias listas, agregar o quitar productos, asignar precios especiales sin cambiar el precio del catálogo y ajustar todos los precios de una lista mediante un porcentaje.
+
 ## Actualización: 3 imágenes por producto
 
 Para una instalación que ya está funcionando, ejecuta una sola vez en **Supabase > SQL Editor** el archivo `supabase/migration_3_product_images.sql`. Después sube esta versión a GitHub; Netlify la publicará automáticamente. La primera imagen seleccionada será la portada y las otras dos aparecerán en la galería del producto.
