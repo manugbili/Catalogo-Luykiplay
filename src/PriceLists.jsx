@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowUpDown, Plus, Save, Trash2, X } from "lucide-react";
+import { ArrowUpDown, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { supabase } from "./supabase";
 
 const money = (n) => new Intl.NumberFormat("es-CL").format(Number(n || 0));
@@ -9,6 +9,7 @@ export default function PriceLists({ products, close, onPricesUpdated }) {
   const [cur, setCur] = useState(null);
   const [items, setItems] = useState([]);
   const [toAdd, setToAdd] = useState("");
+  const [query, setQuery] = useState("");
   const [drafts, setDrafts] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -37,6 +38,10 @@ export default function PriceLists({ products, close, onPricesUpdated }) {
 
   const byId = Object.fromEntries(products.map((p) => [p.id, p]));
   const free = products.filter((p) => !items.some((i) => i.product_id === p.id));
+  const normalizedQuery = query.trim().toLocaleLowerCase("es");
+  const matchesSearch = (product) => !normalizedQuery || `${product?.name || ""} ${product?.category || ""}`.toLocaleLowerCase("es").includes(normalizedQuery);
+  const visibleItems = items.filter((item) => matchesSearch(byId[item.product_id]));
+  const visibleFree = free.filter(matchesSearch);
 
   const newList = async () => {
     const name = prompt("Nombre de la nueva lista (ej: Mayorista)");
@@ -67,7 +72,8 @@ export default function PriceLists({ products, close, onPricesUpdated }) {
   };
 
   const add = async () => {
-    const p = byId[toAdd] || free[0];
+    const selected = visibleFree.find((product) => product.id === toAdd);
+    const p = selected || visibleFree[0];
     if (!p || !cur) return;
     const { error } = await supabase.from("price_list_items").insert({ list_id: cur, product_id: p.id, price: p.price });
     if (error) return alert(error.message);
@@ -150,13 +156,18 @@ export default function PriceLists({ products, close, onPricesUpdated }) {
 
           {cur && (
             <>
+              <label className="pl-search">
+                <Search />
+                <input type="search" value={query} onChange={(event) => { setQuery(event.target.value); setToAdd(""); }} placeholder="Buscar producto por nombre o categoría…" aria-label="Buscar productos en la lista de precio" />
+                {query && <button type="button" onClick={() => { setQuery(""); setToAdd(""); }} aria-label="Limpiar búsqueda"><X /></button>}
+              </label>
               <div className="pl-row">
-                <select value={toAdd} onChange={(event) => setToAdd(event.target.value)} aria-label="Producto a agregar" disabled={!free.length}>
-                  {free.length
-                    ? free.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)
-                    : <option>Todos los productos ya están en esta lista</option>}
+                <select value={toAdd} onChange={(event) => setToAdd(event.target.value)} aria-label="Producto a agregar" disabled={!visibleFree.length}>
+                  {visibleFree.length
+                    ? visibleFree.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)
+                    : <option>{query ? "No hay productos disponibles con esta búsqueda" : "Todos los productos ya están en esta lista"}</option>}
                 </select>
-                <button className="primary" onClick={add} disabled={!free.length}><Plus /> Agregar</button>
+                <button className="primary" onClick={add} disabled={!visibleFree.length}><Plus /> Agregar</button>
                 <button className="outline" onClick={bulk} disabled={!items.length || saving}><ArrowUpDown /> Ajustar todos</button>
               </div>
 
@@ -164,7 +175,7 @@ export default function PriceLists({ products, close, onPricesUpdated }) {
                 <table className="pl-table">
                   <thead><tr><th>Producto</th><th>Precio actual</th><th>Precio nuevo</th><th>Acción</th><th /></tr></thead>
                   <tbody>
-                    {items.map((item) => (
+                    {visibleItems.map((item) => (
                       <tr key={item.product_id}>
                         <td>{byId[item.product_id]?.name || "(producto eliminado)"}</td>
                         <td className="pl-current">${money(byId[item.product_id]?.price ?? 0)}</td>
@@ -182,6 +193,7 @@ export default function PriceLists({ products, close, onPricesUpdated }) {
                 </table>
               </div>
               {!items.length && <p className="empty">Esta lista está vacía. Agrega un producto para empezar.</p>}
+              {!!items.length && !visibleItems.length && <p className="empty">No encontramos productos que coincidan con “{query}”.</p>}
               {saving && <p className="pl-saving">Guardando…</p>}
             </>
           )}
