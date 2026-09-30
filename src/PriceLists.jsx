@@ -1,16 +1,18 @@
 import { useEffect, useState } from "react";
-import { ArrowUpDown, Plus, Trash2, X } from "lucide-react";
+import { ArrowUpDown, Plus, Save, Trash2, X } from "lucide-react";
 import { supabase } from "./supabase";
 
 const money = (n) => new Intl.NumberFormat("es-CL").format(Number(n || 0));
 
-export default function PriceLists({ products, close }) {
+export default function PriceLists({ products, close, onPricesUpdated }) {
   const [lists, setLists] = useState([]);
   const [cur, setCur] = useState(null);
   const [items, setItems] = useState([]);
   const [toAdd, setToAdd] = useState("");
+  const [drafts, setDrafts] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingId, setSavingId] = useState(null);
 
   const loadLists = async () => {
     const { data, error } = await supabase.from("price_lists").select("*").order("created_at");
@@ -25,7 +27,9 @@ export default function PriceLists({ products, close }) {
     if (!id) return setItems([]);
     const { data, error } = await supabase.from("price_list_items").select("*").eq("list_id", id);
     if (error) return alert(error.message);
-    setItems(data || []);
+    const nextItems = data || [];
+    setItems(nextItems);
+    setDrafts(Object.fromEntries(nextItems.map((item) => [item.product_id, item.price])));
   };
 
   useEffect(() => { loadLists(); }, []);
@@ -71,11 +75,23 @@ export default function PriceLists({ products, close }) {
     loadItems(cur);
   };
 
-  const setPrice = async (pid, value) => {
-    const price = Math.max(0, Math.round(Number(value) || 0));
-    const { error } = await supabase.from("price_list_items").update({ price }).eq("list_id", cur).eq("product_id", pid);
-    if (error) return alert(error.message);
-    loadItems(cur);
+  const applyPrice = async (pid) => {
+    const product = byId[pid];
+    const newPrice = Math.max(0, Math.round(Number(drafts[pid]) || 0));
+    if (!product) return alert("Este producto ya no existe en el catálogo.");
+    if (newPrice <= 0) return alert("Ingresa un precio nuevo mayor que $0.");
+    if (newPrice === Number(product.price)) return alert("El precio nuevo es igual al precio actual.");
+    setSavingId(pid);
+    const productResult = await supabase.from("products").update({
+      previous_price: Number(product.price),
+      price: newPrice
+    }).eq("id", pid);
+    if (productResult.error) { setSavingId(null); return alert(productResult.error.message); }
+    const itemResult = await supabase.from("price_list_items").update({ price: newPrice }).eq("list_id", cur).eq("product_id", pid);
+    setSavingId(null);
+    if (itemResult.error) return alert(itemResult.error.message);
+    await onPricesUpdated?.();
+    await loadItems(cur);
   };
 
   const remove = async (pid) => {
@@ -85,20 +101,26 @@ export default function PriceLists({ products, close }) {
   };
 
   const bulk = async () => {
-    const pct = Number(prompt("Ajustar todos los precios de esta lista (%). Ej: 10 para subir, -15 para bajar", "10"));
+    const pct = Number(prompt("Ajustar y publicar todos los precios (%). Ej: 10 para subir, -15 para bajar", "10"));
     if (!Number.isFinite(pct) || pct === 0) return;
     const factor = 1 + pct / 100;
     if (factor < 0) return alert("El ajuste no puede dejar precios negativos.");
+    if (!confirm(`¿Aplicar un ajuste de ${pct}% al catálogo? Los precios actuales quedarán como precios anteriores.`)) return;
     setSaving(true);
-    const results = await Promise.all(items.map((item) =>
-      supabase.from("price_list_items")
-        .update({ price: Math.round((item.price * factor) / 10) * 10 })
-        .eq("list_id", cur).eq("product_id", item.product_id)
-    ));
+    const results = await Promise.all(items.map(async (item) => {
+      const product = byId[item.product_id];
+      if (!product) return { error: null };
+      const currentPrice = Number(product.price) || 0;
+      const newPrice = Math.max(0, Math.round((currentPrice * factor) / 10) * 10);
+      const productResult = await supabase.from("products").update({ previous_price: currentPrice, price: newPrice }).eq("id", item.product_id);
+      if (productResult.error) return productResult;
+      return supabase.from("price_list_items").update({ price: newPrice }).eq("list_id", cur).eq("product_id", item.product_id);
+    }));
     setSaving(false);
     const failed = results.find((result) => result.error);
     if (failed) return alert(failed.error.message);
-    loadItems(cur);
+    await onPricesUpdated?.();
+    await loadItems(cur);
   };
 
   if (loading) return (
@@ -112,6 +134,7 @@ export default function PriceLists({ products, close }) {
           <button className="close" onClick={close} aria-label="Cerrar"><X /></button>
           <small>LISTAS DE PRECIO</small>
           <h2>Administra tus listas</h2>
+          <p className="pl-help">Escribe el precio nuevo y presiona <b>Actualizar</b>. El precio actual quedará como precio anterior y el cambio aparecerá inmediatamente en el producto.</p>
 
           <div className="pl-row">
             <select value={cur || ""} onChange={(event) => setCur(event.target.value)} aria-label="Lista de precio">
@@ -139,17 +162,19 @@ export default function PriceLists({ products, close }) {
 
               <div className="pl-table-wrap">
                 <table className="pl-table">
-                  <thead><tr><th>Producto</th><th>Precio base</th><th>Precio en lista</th><th /></tr></thead>
+                  <thead><tr><th>Producto</th><th>Precio actual</th><th>Precio nuevo</th><th>Acción</th><th /></tr></thead>
                   <tbody>
                     {items.map((item) => (
                       <tr key={item.product_id}>
                         <td>{byId[item.product_id]?.name || "(producto eliminado)"}</td>
-                        <td>${money(byId[item.product_id]?.price ?? 0)}</td>
+                        <td className="pl-current">${money(byId[item.product_id]?.price ?? 0)}</td>
                         <td>
-                          <input className="pl-price" type="number" min="0" step="10" defaultValue={item.price} key={item.price}
-                            onBlur={(event) => setPrice(item.product_id, event.target.value)}
-                            aria-label={`Precio de ${byId[item.product_id]?.name || "producto"} en esta lista`} />
+                          <div className="pl-price-field"><span>$</span><input className="pl-price" type="number" min="0" step="10"
+                            value={drafts[item.product_id] ?? ""}
+                            onChange={(event) => setDrafts((current) => ({ ...current, [item.product_id]: event.target.value }))}
+                            aria-label={`Precio nuevo de ${byId[item.product_id]?.name || "producto"}`} /></div>
                         </td>
+                        <td><button className="primary pl-apply" onClick={() => applyPrice(item.product_id)} disabled={savingId === item.product_id}><Save /> {savingId === item.product_id ? "Guardando…" : "Actualizar"}</button></td>
                         <td><button className="icon" onClick={() => remove(item.product_id)} title="Quitar de la lista" aria-label="Quitar producto"><Trash2 /></button></td>
                       </tr>
                     ))}
